@@ -1,0 +1,128 @@
+from naukri_bot import login_to_naukri
+from apply_bot import apply_to_job
+import pandas as pd
+from datetime import datetime, timedelta
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+
+# Function to check if job is posted recently
+def is_job_posted_recently(posted_date_str):
+    today = datetime.today()
+
+    # Handling "X days ago" format
+    if "days ago" in posted_date_str:
+        days_ago = int(posted_date_str.split()[0])
+        job_posted_date = today - timedelta(days=days_ago)
+        return job_posted_date >= today - timedelta(days=2)
+
+    # Handle "30+ days ago" format
+    if "30+" in posted_date_str or "month" in posted_date_str:
+        return False
+
+    return False
+
+def apply_job(driver, job_url):
+    # Open the job page
+    driver.get(job_url)
+    
+    # Wait for the "Apply" button to be present and click it
+    WebDriverWait(driver, 10).until(
+        EC.presence_of_element_located((By.XPATH, '//button[text()="Apply"]'))
+    ).click()
+
+    # Wait for the application to complete (may need further steps based on the application form)
+    # We will assume that applying immediately submits the application
+    print(f"✅ Applied to job at {job_url}")
+
+if __name__ == "__main__":
+    driver = login_to_naukri()
+
+    # Search only for "DevOps Engineer" jobs
+    job_titles = [
+        "DevOps Engineer"
+    ]
+    locations = ["bangalore", "remote"]
+
+    # Experience filter: 3-8 years
+    min_exp = 3
+    max_exp = 8
+
+    all_matched_jobs = []
+
+    # Search for DevOps Engineer jobs
+    for title in job_titles:
+        for location in locations:
+            print(f"Searching jobs for: {title} in {location.capitalize()} with {min_exp}-{max_exp} years experience")
+
+            # Navigate to the job search page
+            driver.get(f"https://www.naukri.com/{title}-jobs-in-{location}?experience={min_exp}-{max_exp}")
+
+            # Log the URL to check what we are searching for
+            current_url = driver.current_url
+            print(f"Current search URL: {current_url}")  # Log current search URL
+
+            # Wait for the job containers to be present
+            try:
+                # Explicit wait to check if job containers are present
+                WebDriverWait(driver, 20).until(
+                    EC.presence_of_all_elements_located((By.XPATH, '//div[@class="jobTuple"]'))
+                )
+
+                # Now grab job containers (limit to first 20 jobs)
+                job_containers = driver.find_elements(By.XPATH, '//div[@class="jobTuple"]')[:20]
+
+                if not job_containers:
+                    print("⚠️ No job postings found on this page.")
+                    continue
+
+                # Loop through the job containers and automatically apply
+                for i, container in enumerate(job_containers):
+                    # Extract job title and URL from the container using the updated CSS selector for job titles
+                    job_title_elements = container.find_elements(By.CSS_SELECTOR, 'a.title')
+                    if job_title_elements:
+                        job_title = job_title_elements[0].text  # Get the job title
+                        job_url = job_title_elements[0].get_attribute('href')  # Get the URL (href attribute)
+                    else:
+                        print(f"⚠️ Skipping job {i + 1}: No title found.")
+                        continue
+                    
+                    # Extract the company name and posted date (still using the current XPath for company and date)
+                    job_company = container.find_element(By.XPATH, './/a[@class="subTitle ellipsis fleft"]').text
+                    posted_date = container.find_element(By.XPATH, './/span[@class="subTitle"]').text
+                    
+                    # Filter jobs posted within the last 2 days
+                    if not is_job_posted_recently(posted_date):
+                        print(f"⚠️ Skipping job: {job_title} at {job_company}, posted {posted_date}")
+                        continue
+
+                    job_data = {
+                        "link": job_url,
+                        "title": job_title,
+                        "company": job_company,
+                        "posted_date": posted_date
+                    }
+                    job_data["date"] = datetime.now().strftime("%Y-%m-%d")
+
+                    print(f"Job {i + 1}: {job_data['title']} at {job_data['company']}")
+
+                    # **Apply to the job automatically**
+                    apply_job(driver, job_url)
+
+                    # Add the job to our list of matched jobs
+                    all_matched_jobs.append(job_data)
+
+            except Exception as e:
+                print(f"⚠️ Error loading job containers: {str(e)}")
+
+    # Save matched jobs to CSV
+    if all_matched_jobs:
+        try:
+            # Save matched jobs to CSV
+            df = pd.DataFrame(all_matched_jobs)
+            df.to_csv(r"C:\job-applier-ai\matched_jobs.csv", index=False)
+            print("\n✅ Matched jobs saved and applied (where applicable).")
+        except Exception as e:
+            print(f"⚠️ Error saving CSV: {str(e)}")
+    else:
+        print("⚠️ No jobs matched. CSV was not saved.")
